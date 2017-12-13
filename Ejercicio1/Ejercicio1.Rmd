@@ -61,34 +61,37 @@ La tabla siguiente muestra unos descriptivos de frecuencias de las variables cat
 
 ```{r, echo=FALSE}
 t <- tabular((gender + SeniorCitizen + Partner + Dependents + PhoneService + 
-           MultipleLines + InternetService + OnlineSecurity + 
-           OnlineSecurity + OnlineBackup + DeviceProtection + 
-           TechSupport + StreamingTV + StreamingMovies + Contract + 
+           MultipleLines + InternetService + OnlineSecurity 
+           + OnlineBackup + DeviceProtection + TechSupport 
+           + StreamingTV + StreamingMovies + Contract + 
            PaperlessBilling + PaymentMethod) ~ (n=1) + ("%"=Percent())*Format(digits=2)+ Churn*((n=1) + ("%"=Percent(denom = "col"))*Format(digits=2)), dfcat)
 t
 ```
 
-```{r, fig.width=10, fig.height=10}
+```{r, fig.width=15, fig.height=15}
 par(mfrow=c(4,4))
-for (i in dfcat[ , -c(1, 18)]) {
+index <- 1
+data  <- dfcat[ , -c(1, 18)]
+for (i in data) {
   n <- length(levels(i))
   counts <- table(i, dfcat$Churn)
   counts <- prop.table(counts, margin = 2)
   if(n == 2){
     barplot(counts, main=names(i),
-    xlab=names(df)[21], col=c("darkblue", "red"),
-    legend = rownames(counts), beside=TRUE, ylim = c(0,1)) 
+    xlab=names(data)[index], col=c("darkblue", "red"),
+    legend = rownames(counts), beside=TRUE, ylim = c(0,1), cex.lab = 1.8, cex.names = 1.5) 
   }
   if(n == 3){
     barplot(counts, main=names(i),
-    xlab=names(df)[21], col=c("darkblue", "red", "forestgreen"),
-    legend = rownames(counts), beside=TRUE, ylim = c(0,1)) 
+    xlab=names(data)[index], col=c("darkblue", "red", "forestgreen"),
+    legend = rownames(counts), beside=TRUE, ylim = c(0,1), cex.lab = 1.8, cex.names = 1.5)
   }
   if(n == 4){
     barplot(counts, main=names(i),
-    xlab=names(df)[21], col=c("darkblue", "red", "forestgreen", "yellow2"),
-    legend = rownames(counts), beside=TRUE, ylim = c(0,1)) 
+    xlab=names(data)[index], col=c("darkblue", "red", "forestgreen", "yellow2"),
+    legend = rownames(counts), beside=TRUE, ylim = c(0,1), cex.lab = 1.8, cex.names = 1.5)  
   }
+  index <- index + 1
 }
 ```
 
@@ -101,7 +104,8 @@ chisq <- data.frame(chi2statistic = 0, df = 0, p_value = 0, vcramer = 0)
 
 for (i in dfcat[ , -1]) {
   test <- chisq.test(i, dfcat$Churn)
-  vcramer <- sqrt(test$statistic/(test$parameter*nrow(dfcat)))
+  # vcramer = xi2/(min(f-1,c-1))*numobs y aquí el mínimo siempre es 1, por churn
+  vcramer <- sqrt(test$statistic/nrow(dfcat))
   newrow <- as.numeric(c(test$statistic, test$parameter, test$p.value, vcramer))
   chisq <- rbind(chisq, newrow)
   
@@ -125,10 +129,26 @@ t <- tabular((tenure + MonthlyCharges + TotalCharges) ~ (n=1) + Churn*(mean*Form
 t
 ```
 
+Los contrastes de las variables numéricas se muestran a continuación:
+
+```{r}
+
+```
+
+
+
 ```{r, fig.width=10, fig.height=10, message=FALSE}
 library(dplyr)
 data <- df[ , c(6, 19, 21)]
 data$tenure <- as.factor(data$tenure)
 boxplot(MonthlyCharges~tenure*Churn, data=data)
+```
+
+# Regresión
+
+```{r}
+index <- c(1, 7, 8, 20)
+data <- df[ , -index]
+model <- glm(Churn~., family = binomial(link = "logit"), data = data)
 ```
 
