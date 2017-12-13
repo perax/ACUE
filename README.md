@@ -1,2 +1,2 @@
 # ACUE
-Repositorio con los archivos de los proyectos de ACUE.
+Repositorio con los archivos del proyecto de ACUE.
