@@ -3,12 +3,20 @@ title: "Ejercicio 1"
 author: "Antonio J. Perán"
 date: "December 11, 2017"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r, echo=FALSE, message=FALSE}
 # Carga de paquetes
 library(tables)
 library(Hmisc)
+library(party)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(htmlTable)
+library(cluster)
 
 ```
 
@@ -20,18 +28,97 @@ library(Hmisc)
 # Carga y manejo de datos
 file <- "Telco-Customer-Churn.csv"
 df <- read.csv(file = file, header = T, sep = ",", na.strings = "NA")
+df <- df[ , -c(1,20)]
 df <- na.omit(df)
 
 df$SeniorCitizen[df$SeniorCitizen == 0] <- 'No'
 df$SeniorCitizen[df$SeniorCitizen == 1] <- 'Yes'
 df$SeniorCitizen <- as.factor(df$SeniorCitizen)
 
-indexOfnumericvar <- c(6, 19, 20)
+df$MultipleLines <- factor(df$MultipleLines, levels = levels(df$MultipleLines), labels = c("No", "NPS", "Yes"))
+
+df$InternetService <- factor(df$InternetService, levels = levels(df$InternetService), labels = c("DSL", "FO", "No"))
+
+df$OnlineSecurity <- factor(df$OnlineSecurity, levels = levels(df$OnlineSecurity), labels = c("No", "NIS", "Yes"))
+
+df$OnlineBackup <- factor(df$OnlineBackup, levels = levels(df$OnlineBackup), labels = c("No", "NIS", "Yes"))
+
+df$DeviceProtection <- factor(df$DeviceProtection, levels = levels(df$DeviceProtection), labels = c("No", "NIS", "Yes"))
+
+df$TechSupport <- factor(df$TechSupport, levels = levels(df$TechSupport), labels = c("No", "NIS", "Yes"))
+
+df$StreamingTV <- factor(df$StreamingTV, levels = levels(df$StreamingTV), labels = c("No", "NIS", "Yes"))
+
+df$StreamingMovies <- factor(df$StreamingMovies, levels = levels(df$StreamingMovies), labels = c("No", "NIS", "Yes"))
+
+df$Contract <- factor(df$Contract, levels = levels(df$Contract), labels = c("MtM", "1y", "2y"))
+
+df$PaymentMethod <- factor(df$PaymentMethod, levels = levels(df$PaymentMethod), labels = c("BT", "CC", "ElC", "@C"))
+
+set.seed(12)
+train <- sample(nrow(df), 0.8*nrow(df))
+dftrain <- df[train, ]
+dftest <- df[-train, ]
+table(dftrain$Churn)
+table(dftest$Churn)
+
+indexOfnumericvar <- c(5, 18)
 
 dfcat <- df[ , -indexOfnumericvar]
-dfnum <- df[ , c(indexOfnumericvar, 21)]
+dfnum <- df[ , c(indexOfnumericvar,19)]
+
 
 ```
+
+```{r, eval=F}
+acc <- numeric()
+sens <- numeric()
+spec <- numeric()
+minsplit <- seq(10, 1500, 10)
+
+for (i in minsplit) {
+  ctreemodel <- ctree(Churn ~ ., data = dftrain, 
+                      controls =ctree_control(testtype = "Bonferroni", 
+                                minsplit = 400))  
+  treepred <- predict(ctreemodel, dftest, type = "response")
+  t <- table(dftest$Churn, treepred, dnn = c("Actual", "Predicted"))
+  tp <- t[4]
+  fp <- t[3]
+  tn <- t[1]
+  fn <- t[2]
+  acc <- c(acc, (tp+tn)/sum(t))
+  sens <- c(sens, tp/(tp+fn))
+  spec <- c(spec, tn/(tn+fp))
+}
+
+plot(minsplit, 1-acc, type = 'l', ylim=c(0,1))
+par(new=T)
+plot(sens, type = 'l', ylim=c(0,1), col = "blue")
+par(new=T)
+plot(spec, type = 'l', ylim=c(0,1), col = "red")
+
+plot(ctreemodel, tnex = 1, terminal_panel = node_terminal, tp_args=list(id=TRUE, abbreviate=TRUE, digits=1))
+
+treemodel <- rpart(Churn ~ ., data = dftrain, method = "class", parms = list(split="information"))
+treemodel$cptable
+
+plotcp(treemodel)
+
+treemodelpruned <- prune(treemodel, cp=.01242445) 
+prp(treemodelpruned, type = 2, extra = 104, fallen.leaves = TRUE)
+
+treepred <- predict(treemodel, dftest, type = "class")
+
+#tmodel <- cforest(Churn ~ ., data = dftrain)
+#varimp(tmodel)
+#treepred <- predict(tmodel, dftest , OOB=TRUE, type = "response")
+
+tmodel <- randomForest(Churn ~ ., data = dftrain, importance = TRUE)
+importance(tmodel, type = 2)
+treepred <- predict(tmodel, dftest)
+
+```
+
 
 El conjunto de datos consta de `r ncol(df)` variables y `r nrow(df)` observaciones, donde cada observación representa el tipo de contrato firmado de un cliente con la empresa, añadiendo además una variable que informa de si este cliente mantiene o no el contrato firmado. La lista de variables es la siguiente:
 
@@ -57,21 +144,23 @@ El conjunto de datos consta de `r ncol(df)` variables y `r nrow(df)` observacion
 * `r names(df)[20]`
 * `r names(df)[21]`
 
+# Con servicio de internet
+
 La tabla siguiente muestra unos descriptivos de frecuencias de las variables categóricas según la variable `Churn`.
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, results='asis'}
 t <- tabular((gender + SeniorCitizen + Partner + Dependents + PhoneService + 
            MultipleLines + InternetService + OnlineSecurity 
            + OnlineBackup + DeviceProtection + TechSupport 
            + StreamingTV + StreamingMovies + Contract + 
            PaperlessBilling + PaymentMethod) ~ (n=1) + ("%"=Percent())*Format(digits=2)+ Churn*((n=1) + ("%"=Percent(denom = "col"))*Format(digits=2)), dfcat)
-t
+html(t, options = htmloptions(HTMLleftpad=TRUE))
 ```
 
 ```{r, fig.width=15, fig.height=15}
 par(mfrow=c(4,4))
 index <- 1
-data  <- dfcat[ , -c(1, 18)]
+data  <- dfcat[ , -19]
 for (i in data) {
   n <- length(levels(i))
   counts <- table(i, dfcat$Churn)
@@ -102,7 +191,7 @@ Y ahora ser realizan unos contrastes Chi-cuadrado para comprobar si las relacion
 ```{r}
 chisq <- data.frame(chi2statistic = 0, df = 0, p_value = 0, vcramer = 0)
 
-for (i in dfcat[ , -1]) {
+for (i in dfcat) {
   test <- chisq.test(i, dfcat$Churn)
   # vcramer = xi2/(min(f-1,c-1))*numobs y aquí el mínimo siempre es 1, por churn
   vcramer <- sqrt(test$statistic/nrow(dfcat))
@@ -114,9 +203,9 @@ for (i in dfcat[ , -1]) {
 chisq <- chisq[-1, ]
 chisq$p_value <- round(chisq$p_value, 3)
 chisq$vcramer <- round(chisq$vcramer, 2)
-rownames(chisq) <- names(dfcat[ , -1])
+rownames(chisq) <- names(dfcat)
 
-chisq
+htmlTable(chisq)
 ```
 
 
@@ -125,7 +214,7 @@ chisq
 La tabla siguiente muestra unos descriptivos de medias y desviación típica de las variables numéricas según la variable `Churn`.
 
 ```{r, message=FALSE}
-t <- tabular((tenure + MonthlyCharges + TotalCharges) ~ (n=1) + Churn*(mean*Format(digits=4) + sd*Format(digits=4)), dfnum)
+t <- tabular((tenure + MonthlyCharges) ~ (n=1) + Churn*(mean*Format(digits=4) + sd*Format(digits=4)), dfnum)
 t
 ```
 
@@ -137,18 +226,45 @@ Los contrastes de las variables numéricas se muestran a continuación:
 
 
 
-```{r, fig.width=10, fig.height=10, message=FALSE}
+```{r, eval=FALSE, fig.width=10, fig.height=10, message=FALSE}
 library(dplyr)
-data <- df[ , c(6, 19, 21)]
+data <- df2[ , c(5, 18, 19)]
 data$tenure <- as.factor(data$tenure)
 boxplot(MonthlyCharges~tenure*Churn, data=data)
 ```
 
-# Regresión
+## Regresión
+
+```{r, eval=FALSE}
+data <- df2
+model <- glm(Churn~SeniorCitizen+Partner+Dependents+tenure+PhoneService+MultipleLines+InternetService+OnlineSecurity+OnlineBackup+DeviceProtection+TechSupport+StreamingTV+StreamingMovies+Contract+PaperlessBilling+PaymentMethod+MonthlyCharges, family = binomial(link = "logit"), data = df)
+```
+
+
+# Parte 2
 
 ```{r}
-index <- c(1, 7, 8, 20)
-data <- df[ , -index]
-model <- glm(Churn~., family = binomial(link = "logit"), data = data)
+dfyes <- df[df$Churn == 'Yes' , ]
+dfno  <- df[df$Churn == 'No'  , ]
+
+# estandarizamos las variables numéricas
+dissmatrix <- daisy(dfno, metric = 'gower')
+
+# Calculate silhouette width for many k using PAM
+
+sil_width <- c(NA)
+
+for(i in 2:15){
+  pam_fit <- pam(dissmatrix, diss = TRUE, k = 2)
+  sil_width[i] <- pam_fit$silinfo$avg.width
+}
+
+# Plot sihouette width (higher is better)
+
+plot(1:15, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:15, sil_width)
+
 ```
 
