@@ -1,14 +1,28 @@
 ---
-title: "Ejercicio 1"
-author: "Antonio J. Perán"
-date: "December 11, 2017"
-output: html_document
-editor_options: 
+title: 'Ejercicio 1: Movistar'
+author: "Antonio J. Perán, Roberto García, Damián Bornás"
+header-includes:
+- \usepackage{caption}
+- \usepackage[spanish]{babel}
+- \usepackage{placeins}
+bibliography: bibliography.bib
+output:
+  word_document:
+    toc: yes
+    toc_depth: '4'
+  pdf_document:
+    toc: yes
+    toc_depth: 4
+  html_document: default
+editor_options:
   chunk_output_type: console
 ---
 
-```{r, echo=FALSE, message=FALSE}
+```{r global_options, include=FALSE, eval=TRUE}
+rm(list=ls()) ### To clear namespace
 # Carga de paquetes
+library(knitr)
+library(pander)
 library(tables)
 library(Hmisc)
 library(party)
@@ -17,24 +31,236 @@ library(rpart.plot)
 library(randomForest)
 library(htmlTable)
 library(cluster)
-
+#opciones globales chunk
+opts_chunk$set(fig.width=15, fig.height=15, fig.path='Figs/',
+               echo=FALSE, warning=FALSE, message=FALSE, eval = FALSE)
 ```
 
-# Introducción
+\newpage
 
 # Descripción del conjunto de datos
 
-```{r, echo=FALSE}
+```{r, eval=TRUE}
 # Carga y manejo de datos
 file <- "Telco-Customer-Churn.csv"
 df <- read.csv(file = file, header = T, sep = ",", na.strings = "NA")
-df <- df[ , -c(1,20)]
 df <- na.omit(df)
 
 df$SeniorCitizen[df$SeniorCitizen == 0] <- 'No'
 df$SeniorCitizen[df$SeniorCitizen == 1] <- 'Yes'
 df$SeniorCitizen <- as.factor(df$SeniorCitizen)
+```
 
+El conjunto de datos consta de `r ncol(df)` variables y `r nrow(df)` observaciones después de eliminar algunas cuyas variables tomaban valores perdidos. Cada observación representa un contrato firmado por un cliente con Movistar, añadiendo además una variable que informa de si este cliente mantiene o no el contrato en la actualidad con la empresa. La lista de variables es la siguiente:
+
+* `r names(df)[1]`: Esta variable es un identificador interno de la compañía para el cliente. Como para nuestro análisis es innecesaria, esta variable será eliminada del conjunto de datos.
+* `r names(df)[2]`: El sexo del titular del contrato, que toma los valores `Male` y `Female`.
+* `r names(df)[3]`: Variable que toma los valores `yes` o `no` dependiendo de si el cliente está o no jubilado.
+* `r names(df)[4]`: Variable que toma los valores `yes` o `no` en función de que el cliente tenga o no pareja.
+* `r names(df)[5]`: Variable que toma los valores `Yes` o `No` en función de que el cliente tenga o no familiares dependientes a su cargo.
+* `r names(df)[6]`: Variable numérica que recoge el número de meses de duración del contrato.
+* `r names(df)[7]`: Variable que toma los valores `Yes` o `No` dependiendo de si el cliente contrata o no el servicio de telefonía.
+* `r names(df)[8]`: Variable que toma los valores `Yes`, `No` o `No phone service` dependiendo de si el cliente contrata o no múltiples líneas telefónicas o si no ha contratado el servicio de telefonía.
+* `r names(df)[9]`: Variable que toma los valores `DSL`, `Fiber Optic` o `No` dependiendo del tipo de internet contratado o si no ha contratado este servicio.
+* `r names(df)[10]`, `r names(df)[11]`, `r names(df)[12]`, `r names(df)[13]`, `r names(df)[14]` y `r names(df)[15]`: Variables que toman los valores `Yes`, `No` o `No internet service` dependiendo de si el cliente contrata o no este servicio o si no lo contrata debido a que no contrató el servicio de internet, ya que estos servicios están ligados al servicio de internet.
+* `r names(df)[16]`: Esta variable recoge el tipo de contrato firmado. Toma los valores `Month-to-month` para un contrato mensual, `One year` para un contrato anual y `Two year` para un contrato bianual.
+* `r names(df)[17]`: Esta variable toma los valores `Yes` o `No` dependiendo de si el cliente ha pedido facturación sin papel o con papel. La facturación sin papel podría ser vía correo electrónico u otras vías.
+* `r names(df)[18]`: Esta variable recoge el método de pago empleado en el cobro de la factura. Los valores toma son `Bank transfer (automatic)`, `Credit card (automatic)`,   `Electronic check` y `Mailed check`.
+* `r names(df)[19]`: Esta variable recoge el pago mensual que realiza el cliente por mantener el contrato.
+* `r names(df)[20]`: Esta variable recoge el dinero total que ha desembolsado el cliente mientras ha mantenido vigente el contrato. Por tanto, esta variable está fuertemente relacionada con las variables `tenure` y `MonthlyCharges`, ya que `TotalCharges = MonthlyCharges*tenure`. De hecho el coeficiente de correlación entre `TotalCharges` y `MonthlyCharges*tenure` es `r round(cor(df$TotalCharges, df$MonthlyCharges*df$tenure), 4)`, lo que reafirma lo anterior. Por esta razón esta variable será eliminada del conjunto de datos.
+* `r names(df)[21]`: Esta variable es la que nos indica si el cliente ha roto o no su contrato con Movistar. Toma el valor `Yes` si el cliente se ha ido y el valor `No` si sigue con la compañía.
+
+```{r, eval=TRUE}
+# eliminamos el id y totalcharges
+df <- df[ , -c(1,20)]
+
+indexOfnumericvar <- c(5, 18)
+dfcat <- df[ , -indexOfnumericvar]
+dfnum <- df[ , c(indexOfnumericvar,19)]
+```
+
+\newpage
+
+# Apartado 1
+
+Movistar nos pide que realicemos un análisis de perfiles de posibles desertores utilizando los datos contenidos en el dataset `Telco-Customer-Churn.csv` con el objetivo de evitar una fuga de usuarios con este perfil a compañias como Vodafone. También nos pide indentificar el perfil de clientes fieles a la compañía. Todo esto en base a características interpretables de los clientes, de ahí que una buena forma de abordar el problema sean los árboles de clasificación.
+
+## Metodología
+
+### Análisis exploratorio
+
+Antes de aplicar cualquier modelo es conveniente familiarizarnos con los datos mediante un análisis exploratorio. Los cuadros 1, 2, 3 muestran análisis descriptivos de frecuencias para las variables categóricas y el cuadro 4 muestra la media y desviación típica para las variables numéricas agrupando siempre según la variable `Churn`.
+
+\ 
+
+\begin{center}
+\captionof{table}{Tabla de descriptivos para variables sociodemográficas}
+
+```{r, results='asis', eval=TRUE}
+t <- tabular((gender + SeniorCitizen + Partner + Dependents + Contract + 
+           PaperlessBilling + PaymentMethod) ~ (n=1) + (perc=Percent())*Format(digits=2)+ Churn*((n=1) + (perc=Percent(denom = "col"))*Format(digits=2)), dfcat)
+#html(t, options = htmloptions(HTMLleftpad=TRUE))
+latex(t)
+```
+
+\end{center}
+
+\ 
+
+\begin{center}
+\captionof{table}{Tabla de descriptivos para variables relacionadas con el servicio telefónico.}
+
+```{r, results='asis', eval=TRUE}
+t <- tabular((PhoneService + 
+           MultipleLines) ~ (n=1) + (perc=Percent())*Format(digits=2)+ Churn*((n=1) + (perc=Percent(denom = "col"))*Format(digits=2)), dfcat)
+#html(t, options = htmloptions(HTMLleftpad=TRUE))
+latex(t)
+```
+
+\end{center}
+
+\newpage 
+
+\begin{center}
+\captionof{table}{Tabla de descriptivos para variables relacionadas con los servicios de internet.}
+
+```{r, results='asis', eval=TRUE}
+t <- tabular((InternetService + OnlineSecurity 
+           + OnlineBackup + DeviceProtection + TechSupport 
+           + StreamingTV + StreamingMovies) ~ (n=1) + (perc=Percent())*Format(digits=2)+ Churn*((n=1) + (perc=Percent(denom = "col"))*Format(digits=2)), dfcat)
+#html(t, options = htmloptions(HTMLleftpad=TRUE))
+latex(t)
+```
+
+\end{center}
+
+\ 
+
+\begin{center}
+\captionof{table}{Tabla de descriptivos para variables numéricas.}
+
+```{r, results='asis', eval=TRUE}
+t <- tabular((tenure + MonthlyCharges) ~ (n=1) + Churn*(mean*Format(digits=4) + sd*Format(digits=4)), dfnum)
+latex(t)
+```
+
+\end{center}
+
+\ 
+
+Las tablas son útiles para determinar con precisión los valores exactos de las variables, pero es difícil apreciar patrones entre tantos números. Una mejor visualización de las posibles relaciones entre las variables de nuestro conjunto de datos y la variable `Churn` puede verse en la figura 1. En ella se muestra la distribución de las variables consideradas tanto para aquellos clientes que siguen con Movistar como para los que no. Para cada variable categórica se muestra un diagrama de barras representando la frecuencia relativa, en tantos sobre uno; y para cada variable numérica un gráfico de cajas o boxplot. 
+
+En la figura 1 pueden verse características notables de aquellos clientes que rescinden el contrato con la empresa. Estos son personas que contratan mayoritariamente fibra óptica (variable `InternetService`) con un contrato mensual (variable `Contract`) y cuya duración media de contrato es de 18 meses (variable `tenure`), es decir, apenas superan el año de contrato, realizando el pago mediante Electronic check (variable `PaymentMethod`). 
+
+También se aprecian otras posibles relaciones más débiles como que son personas más frecuentemente solteras (variable `Partner`), no contratan soporte técnico ni seguridad online (variables `TechSupport` y `OnlineSecurity`) y asumen un gasto mensual más alto.
+
+```{r, eval=TRUE, fig.cap='Distribución de las variables del conjunto de datos agrupando según Churn.'}
+par(mfrow=c(6,3))
+index <- 1
+data <- df
+varfactor <- data$Churn
+data <- data[ , -ncol(data)]
+
+for (i in data) {
+  if(is.factor(i)){
+    n <- length(levels(i))
+    counts <- table(i, varfactor)
+    counts <- prop.table(counts, margin = 2)
+    if(n == 2){
+      barplot(counts, main=names(i),
+      xlab=names(data)[index], col=c("darkblue", "red"),
+      legend = rownames(counts), beside=TRUE, ylim = c(0,1),
+      cex.lab = 1.8, cex.names = 1.5) 
+    }
+    if(n == 3){
+      barplot(counts, main=names(i),
+      xlab=names(data)[index], col=c("darkblue", "red", "forestgreen"),
+      legend = rownames(counts), beside=TRUE, ylim = c(0,1), 
+      cex.lab = 1.8, cex.names = 1.5)
+    }
+    if(n == 4){
+      barplot(counts, main=names(i),
+      xlab=names(data)[index], col=c("darkblue", "red", "forestgreen", "yellow2"),
+      legend = rownames(counts), beside=TRUE, ylim = c(0,1), 
+      cex.lab = 1.8, cex.names = 1.5)
+    } 
+  }else{
+    boxplot(i~varfactor, xlab=names(data)[index], cex.lab = 1.8, cex.names = 1.5)
+  }
+  index <- index + 1
+}
+```
+
+\FloatBarrier
+
+### Contrastes
+
+Para validar si las relaciones que vimos anteriormente son reales o se deben a la aleatoriedad de los datos se realizan contrastes de hipótesis cuyos resultados pueden consultarse en los cuadros 5 y 7. Para variables categóricas empleamos el test $\chi^2$ y para las numéricas el test t-student. Además calculamos también el tamaño del efecto para cuantificar esta relación, en el caso de variables categóricas empleamos el estadístico V de Cramer y para variables numéricas el estadístico d de Cohen. 
+
+Según los resultados que se muestran en el cuadro 5 podemos ver que el género del cliente no tiene relación ninguna con la variable `Churn`, ni el hecho de que contrate o no línea telefónica. Todas las demás resultan tener una relación estadísticamente significativa pero con tamaños del efecto bajos. Como aventurábamos antes, es la variable `Contract` la que tiene una mayor relación con la variable `Churn`.
+
+En el cuadro 7 podemos ver los resultados de las pruebas t de Student para muestras independientes. Ya que el tamaño muestral es tan grande, podemos asumir normalidad, pero no homocedasticidad, pues unos test previos indicaron que las distribuciones no tienen igual varianza. Los resultados indican que existe una relación significativa entre las variables, destacando un gran tamaño del efecto en la variable `tenure`.
+
+\ 
+
+\captionof{table}{Resultados de las pruebas $\chi^2$.}
+
+```{r, eval=TRUE}
+chisq <- data.frame(chi2 = 0, df = 0, pvalue = 0, vcramer = 0)
+
+for (i in dfcat[ , -ncol(dfcat)]) {
+  test <- chisq.test(i, dfcat$Churn)
+  # vcramer = xi2/(min(f-1,c-1))*numobs y aquí el mínimo siempre es 1, por churn
+  vcramer <- sqrt(test$statistic/nrow(dfcat))
+  newrow <- as.numeric(c(test$statistic, test$parameter, test$p.value, vcramer))
+  chisq <- rbind(chisq, newrow)
+  
+}
+
+chisq <- chisq[-1, ]
+chisq$chi2    <- round(chisq$vcramer, 2)
+chisq$pvalue <- round(chisq$pvalue, 3)
+chisq$vcramer <- round(chisq$vcramer, 2)
+rownames(chisq) <- names(dfcat[ , -ncol(dfcat)])
+
+kable(chisq)
+```
+
+\ 
+
+\captionof{table}{Resultados de las pruebas t de Student.}
+
+```{r, eval=T}
+library(effsize)
+data <- df$tenure
+test <- t.test(data[df$Churn=='Yes'], data[df$Churn=='No'], var.equal = F, paired = F)
+d <- cohen.d(data, df$Churn)
+
+t <- test$statistic
+dfr <- test$parameter
+pvalue <- test$p.value
+dcohen <- d$estimate
+
+data <- df$MonthlyCharges
+test <- t.test(data[df$Churn=='Yes'], data[df$Churn=='No'], var.equal = F, paired = F)
+d <- cohen.d(data, df$Churn)
+
+t <- round(c(t, test$statistic), 2)
+dfr <- round(c(dfr, test$parameter), 2)
+pvalue <- round(c(pvalue, test$p.value), 3)
+dcohen <- abs(round(c(dcohen, d$estimate), 2))
+
+res <- data.frame(t, df = dfr, pvalue, dcohen)
+rownames(res) <- c("tenure", "MonthlyCharges")
+kable(res)
+rm(res)
+```
+
+\newpage
+
+### Árboles de clasificación inferenciales^[@kabacoff2010r]
+
+```{r, eval=TRUE}
 df$MultipleLines <- factor(df$MultipleLines, levels = levels(df$MultipleLines), labels = c("No", "NPS", "Yes"))
 
 df$InternetService <- factor(df$InternetService, levels = levels(df$InternetService), labels = c("DSL", "FO", "No"))
@@ -59,18 +285,27 @@ set.seed(12)
 train <- sample(nrow(df), 0.8*nrow(df))
 dftrain <- df[train, ]
 dftest <- df[-train, ]
-table(dftrain$Churn)
-table(dftest$Churn)
+t1 <- table(dftrain$Churn)
+t2 <- table(dftest$Churn)
 
-indexOfnumericvar <- c(5, 18)
 
-dfcat <- df[ , -indexOfnumericvar]
-dfnum <- df[ , c(indexOfnumericvar,19)]
 
 
 ```
 
-```{r, eval=F}
+Para abordar el problema de la clasificación vamos a probar diversos algoritmos de aprendizaje automático, para lo que debemos dividir la muestra en dos conjuntos: uno de entrenamiento y otro de test, donde el 80% de la muestra original será destinado al entrenamiento y el 20% para el test. en la muestra de entrenamiento tenemos `r t1[1]` clientes que continúan con la empresa y `r t1[2]` desertores. En la muestra de test tenemos `r t2[1]` clientes que continúan con la empresa y `r t2[2]` desertores.
+
+\ 
+
+El primer método que vamos a utilizar son los árboles de clasificación infenciales, un algoritmo a medio camino entre los árboles de clasificación tradicionales y el RandomForest. En este tipo de árboles la selección de variables en cada nodo se realiza mediante contrastes estadísticos quedándonos con aquella variable que arroja el p-valor más bajo. 
+
+\ 
+
+En la figura 2 puede verse el error cometido en cada árbol entrenado así como la sensibilidad y especificidad del modelo. Los distintos modelos han sido entrenados en función del hiperparámetro `minsplit` que controla el tamaño del árbol asignando un tamaño mínimo a un nodo (número mínimo de observaciones) para que este vuelva a ser dividido. Como se observa en la figura 2 podemos ver que los modelos tienen, en general, un error en torno al 20%; una sensibilidad media/baja, esto es, mala capacidad para detectar clientes que se van a ir realmente y una especificidad alta, esto es, la capacidad del modelo para detectar clientes que no son van a ir realmente.
+
+\FloatBarrier
+
+```{r, eval=FALSE, fig.width=4, fig.height=4, fig.cap="Precisión de los distintos modelos de árboles de clasificación inferenciales generados."}
 acc <- numeric()
 sens <- numeric()
 spec <- numeric()
@@ -79,7 +314,7 @@ minsplit <- seq(10, 1500, 10)
 for (i in minsplit) {
   ctreemodel <- ctree(Churn ~ ., data = dftrain, 
                       controls =ctree_control(testtype = "Bonferroni", 
-                                minsplit = 400))  
+                                minsplit = i))  
   treepred <- predict(ctreemodel, dftest, type = "response")
   t <- table(dftest$Churn, treepred, dnn = c("Actual", "Predicted"))
   tp <- t[4]
@@ -91,180 +326,696 @@ for (i in minsplit) {
   spec <- c(spec, tn/(tn+fp))
 }
 
-plot(minsplit, 1-acc, type = 'l', ylim=c(0,1))
-par(new=T)
-plot(sens, type = 'l', ylim=c(0,1), col = "blue")
-par(new=T)
-plot(spec, type = 'l', ylim=c(0,1), col = "red")
-
-plot(ctreemodel, tnex = 1, terminal_panel = node_terminal, tp_args=list(id=TRUE, abbreviate=TRUE, digits=1))
-
-treemodel <- rpart(Churn ~ ., data = dftrain, method = "class", parms = list(split="information"))
-treemodel$cptable
-
-plotcp(treemodel)
-
-treemodelpruned <- prune(treemodel, cp=.01242445) 
-prp(treemodelpruned, type = 2, extra = 104, fallen.leaves = TRUE)
-
-treepred <- predict(treemodel, dftest, type = "class")
-
-#tmodel <- cforest(Churn ~ ., data = dftrain)
-#varimp(tmodel)
-#treepred <- predict(tmodel, dftest , OOB=TRUE, type = "response")
-
-tmodel <- randomForest(Churn ~ ., data = dftrain, importance = TRUE)
-importance(tmodel, type = 2)
-treepred <- predict(tmodel, dftest)
-
+plot(minsplit, 1-acc, type = 'l', ylim=c(0,1), ylab="statistics")
+lines(minsplit, sens, col = "blue")
+lines(minsplit, spec, col = "red")
+legend(1000,0.85, lty=c(1,1,1), lwd=c(1,1,1), c("1-accuracy", "sensibility", "specificity"), col=c("black","blue","red"), cex = 0.5)
 ```
 
+\ 
 
-El conjunto de datos consta de `r ncol(df)` variables y `r nrow(df)` observaciones, donde cada observación representa el tipo de contrato firmado de un cliente con la empresa, añadiendo además una variable que informa de si este cliente mantiene o no el contrato firmado. La lista de variables es la siguiente:
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-11-1.pdf}
+\caption{Precisión de los distintos modelos de árboles de clasificación inferenciales generados.}
+\end{figure}
 
-* `r names(df)[1]`
-* `r names(df)[2]`
-* `r names(df)[3]`
-* `r names(df)[4]`
-* `r names(df)[5]`
-* `r names(df)[6]`
-* `r names(df)[7]`
-* `r names(df)[8]`
-* `r names(df)[9]`
-* `r names(df)[10]`
-* `r names(df)[11]`
-* `r names(df)[12]`
-* `r names(df)[13]`
-* `r names(df)[14]`
-* `r names(df)[15]`
-* `r names(df)[16]`
-* `r names(df)[17]`
-* `r names(df)[18]`
-* `r names(df)[19]`
-* `r names(df)[20]`
-* `r names(df)[21]`
+\ 
 
-# Con servicio de internet
+En vista de los resultados anteriores el modelo elegido es el que tiene como valor del hiperparámetro minsplit igual a 600, ya que aunmentar un poco la especificidad supone sacrificar mucho la sensibilidad. Elegimos, entonces, el modelo más simple con mejores resultados en el gráfico anterior.
 
-La tabla siguiente muestra unos descriptivos de frecuencias de las variables categóricas según la variable `Churn`.
+\ 
 
-```{r, echo=FALSE, results='asis'}
-t <- tabular((gender + SeniorCitizen + Partner + Dependents + PhoneService + 
-           MultipleLines + InternetService + OnlineSecurity 
-           + OnlineBackup + DeviceProtection + TechSupport 
-           + StreamingTV + StreamingMovies + Contract + 
-           PaperlessBilling + PaymentMethod) ~ (n=1) + ("%"=Percent())*Format(digits=2)+ Churn*((n=1) + ("%"=Percent(denom = "col"))*Format(digits=2)), dfcat)
-html(t, options = htmloptions(HTMLleftpad=TRUE))
+```{r, eval=TRUE}
+  ctreemodel <- ctree(Churn ~ ., data = dftrain, 
+                      controls =ctree_control(testtype = "Bonferroni", 
+                                minsplit = 600))  
+  treepred <- predict(ctreemodel, dftest, type = "response")
+  t <- table(dftest$Churn, treepred, dnn = c("Actual", "Predicted"))
+  tp <- t[4]
+  fp <- t[3]
+  tn <- t[1]
+  fn <- t[2]
+  acc  <- (tp+tn)/sum(t)
+  sens <- tp/(tp+fn)
+  spec <- tn/(tn+fp)
 ```
 
-```{r, fig.width=15, fig.height=15}
-par(mfrow=c(4,4))
-index <- 1
-data  <- dfcat[ , -19]
-for (i in data) {
-  n <- length(levels(i))
-  counts <- table(i, dfcat$Churn)
-  counts <- prop.table(counts, margin = 2)
-  if(n == 2){
-    barplot(counts, main=names(i),
-    xlab=names(data)[index], col=c("darkblue", "red"),
-    legend = rownames(counts), beside=TRUE, ylim = c(0,1), cex.lab = 1.8, cex.names = 1.5) 
-  }
-  if(n == 3){
-    barplot(counts, main=names(i),
-    xlab=names(data)[index], col=c("darkblue", "red", "forestgreen"),
-    legend = rownames(counts), beside=TRUE, ylim = c(0,1), cex.lab = 1.8, cex.names = 1.5)
-  }
-  if(n == 4){
-    barplot(counts, main=names(i),
-    xlab=names(data)[index], col=c("darkblue", "red", "forestgreen", "yellow2"),
-    legend = rownames(counts), beside=TRUE, ylim = c(0,1), cex.lab = 1.8, cex.names = 1.5)  
-  }
-  index <- index + 1
-}
-```
+A continuación mostramos la matriz de confusión resultante de aplicar este modelo de clasificación al conjunto de test. Como podemos ver, 913 clientes son clasificados correctamente como clientes que continúan con la empresa y 212 como desertores. Por otro lado 141 sujetos son clasificados como desertores cuando en realidad no lo son y también 141 sujetos son clasificados como clientes fidedignos cuando en realidad no lo son.
+
+\newpage
 
 
-
-Y ahora ser realizan unos contrastes Chi-cuadrado para comprobar si las relaciones que se aprecian en la tabla anterior son estadísticamente significativas o debidas al azar.
-
-```{r}
-chisq <- data.frame(chi2statistic = 0, df = 0, p_value = 0, vcramer = 0)
-
-for (i in dfcat) {
-  test <- chisq.test(i, dfcat$Churn)
-  # vcramer = xi2/(min(f-1,c-1))*numobs y aquí el mínimo siempre es 1, por churn
-  vcramer <- sqrt(test$statistic/nrow(dfcat))
-  newrow <- as.numeric(c(test$statistic, test$parameter, test$p.value, vcramer))
-  chisq <- rbind(chisq, newrow)
-  
-}
-
-chisq <- chisq[-1, ]
-chisq$p_value <- round(chisq$p_value, 3)
-chisq$vcramer <- round(chisq$vcramer, 2)
-rownames(chisq) <- names(dfcat)
-
-htmlTable(chisq)
-```
-
-
-
-
-La tabla siguiente muestra unos descriptivos de medias y desviación típica de las variables numéricas según la variable `Churn`.
-
-```{r, message=FALSE}
-t <- tabular((tenure + MonthlyCharges) ~ (n=1) + Churn*(mean*Format(digits=4) + sd*Format(digits=4)), dfnum)
+```{r, eval=TRUE}
 t
 ```
 
-Los contrastes de las variables numéricas se muestran a continuación:
+\ 
+
+En la figura 3 puede verse el gráfico del árbol resultante con `minsplit=600` en el que se han abreviado las etiquetas de las variables para una mejor visualización. El árbol tiene una precisión de `r round(acc, 4)`, una sensibilidad de `r round(sens, 3)` y especificidad de `r round(spec, 3)`. 
+
+\ 
+
+Tal y como muestran las probabilidades de los nodos terminales, son los clientes de los nodos 17, 23, 24 y 27 los que tienen una probabilidad más alta de desertar, siendo mucho más notable en los nodos 23 y 24, y dudoso en los restantes. Por tanto, el perfil más pronunciado de clientes que se van son aquellos que tienen un contrato mensual con fibra óptica y que no superan el año de duración del contrato (nodos 23 y 24), siendo el primer mes (nodo 23) crucial para mantener al cliente, que quizá abandona por no estar satisfecho con la calidad del servicio de fibra óptica. 
+
+Por otro lado, aquellos clientes con contrato mensual con fibra óptica que superan el año es más probable que se queden (nodos 28 y 29), salvo aquellos que pagan mediante `Electronic Check`(nodo 27). También tenemos clientes con contratos mensuales con `DSL` o sin internet que es probable que se queden (nodos 16, 19 y 20), salvo aquellos que no contratan soporte técnico y abandonan la empresa en los primeros cinco meses (nodo 17). 
+
+Finalmente, aquellos que adquieren un contrato anual o bianual con Movistar tienen todos unas altas probabilidades de ser clientes fidedignos, sobretodo con contratos bianuales (nodos 5, 6, 8, 9, 11 y 12).
+
+
+```{r, eval=FALSE, fig.height=8, fig.cap="Gráfico del arbol de clasificación inferencial con minsplit=600."}
+plot(ctreemodel, tnex = 1, terminal_panel = node_terminal, tp_args=list(id=TRUE, abbreviate=TRUE, digits=2))
+```
+
+\ 
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-14-1}
+\caption{Gráfico del arbol de clasificación inferencial con minsplit=600.}
+\end{figure}
+
+\ 
+
+### Árboles de clasificación ordinarios^[@kabacoff2010r]
+
+Ahora vamos a probar la clasificación con un modelo más sencillo que el anterior para ver si obtenemos los mismos resultados. En este caso, el modelo utilizado son los árboles de clasificación ordinarios. Con el paquete `rpart` de R realizamos una validación cruzada con distintos tamaños para el árbol obteniendo los siguientes resultados de error de validación cruzada (`xerror`) en función de un parámetro de complejidad del árbol `cp`. Siguiendo la regla de `one-standar-deviation` y viendo que solo tenemos dos modelos, el modelo elegido es el de `cp = 0.01`.
+
+\ 
+
+```{r, eval=TRUE}
+treemodel <- rpart(Churn ~ ., data = dftrain, method = "class", parms = list(split="information"))
+treemodel$cptable
+```
+
+\ 
+
+El gráfico del árbol resultante puede verse en la figura 4. Los resultados son consistentes e idénticos a los reportados por el método anterior, aunque este resultado es mucho más sencillo e interpretable, a costa de desequilibrar sensibilidad y especificidad.
+
+```{r, eval=TRUE, fig.height=4, fig.width=4}
+treemodelpruned <- prune(treemodel, cp=.010) 
+treepred <- predict(treemodelpruned, dftest, type = "class")
+t <- table(dftest$Churn, treepred, dnn = c("Actual", "Predicted"))
+  tp <- t[4]
+  fp <- t[3]
+  tn <- t[1]
+  fn <- t[2]
+  acc  <- (tp+tn)/sum(t)
+  sens <- tp/(tp+fn)
+  spec <- tn/(tn+fp)
+```
 
 ```{r}
-
+prp(treemodelpruned, type = 2, extra = 104, fallen.leaves = TRUE)
 ```
 
 
+\ 
 
-```{r, eval=FALSE, fig.width=10, fig.height=10, message=FALSE}
-library(dplyr)
-data <- df2[ , c(5, 18, 19)]
-data$tenure <- as.factor(data$tenure)
-boxplot(MonthlyCharges~tenure*Churn, data=data)
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-16-1}
+\caption{Gráfico del arbol de clasificación ordinal con cp=0.01.}
+\end{figure}
+
+\ 
+
+A continuación se muestra la matriz de confusión resultante de aplicar el algoritmo de clasificación al conjunto de test. Como podemos ver, en este caso 993 clientes son clasificados correctamente como clientes que continúan con la empresa y 117 como desertores. Por otro lado 61 sujetos son clasificados como desertores cuando en realidad no lo son y 236 sujetos son clasificados como clientes fidedignos cuando en realidad no lo son. La precisión de este modelo es de `r round(acc, 3)`, la sensibilidad toma el valor de `r round(sens, 3)` y la especificidad el valor de `r round(spec, 3)`.
+
+\ 
+
+```{r, eval=TRUE}
+t
 ```
 
-## Regresión
+\ 
 
-```{r, eval=FALSE}
-data <- df2
-model <- glm(Churn~SeniorCitizen+Partner+Dependents+tenure+PhoneService+MultipleLines+InternetService+OnlineSecurity+OnlineBackup+DeviceProtection+TechSupport+StreamingTV+StreamingMovies+Contract+PaperlessBilling+PaymentMethod+MonthlyCharges, family = binomial(link = "logit"), data = df)
+### Random Forest^[@kabacoff2010r]
+
+Finalmente aplicaremos el algoritmo de aprendizaje automático `RandomForest` con árboles de clasificación ordinaria, más complejo que los dos anteriores, con vistas de buscar consistencia con los resultados obtenidos anteriormente y hacernos una idea de la importancia de cada una de las variables.
+
+\ 
+
+```{r, eval=TRUE}
+tmodel <- randomForest(Churn ~ ., data = dftrain, importance = TRUE)
+treepred <- predict(tmodel, dftest)
+t <- table(dftest$Churn, treepred, dnn = c("Actual", "Predicted"))
+  tp <- t[4]
+  fp <- t[3]
+  tn <- t[1]
+  fn <- t[2]
+  acc  <- (tp+tn)/sum(t)
+  sens <- tp/(tp+fn)
+  spec <- tn/(tn+fp)
+```
+
+La matriz de confusión surgida de evaluar el algoritmo de clasificación obtenido en el conjunto de test es se muestra a continuación. Como podemos ver, en este caso 964 clientes son clasificados correctamente como clientes que continúan con la empresa y 161 como desertores. Por otro lado 90 sujetos son clasificados como desertores cuando en realidad no lo son y 192 sujetos son clasificados como clientes fidedignos cuando en realidad no lo son. La precisión de este modelo es de `r round(acc, 3)`, la sensibilidad toma el valor de `r round(sens, 3)` y la especificidad el valor de `r round(spec, 3)`.
+
+\ 
+
+```{r, eval=TRUE}
+t
 ```
 
 
-# Parte 2
+\ 
 
-```{r}
-dfyes <- df[df$Churn == 'Yes' , ]
-dfno  <- df[df$Churn == 'No'  , ]
+Finalmente mostramos una tabla de las variables asociadas a un índice de importancia que reporta el algoritmo. En ella podemos ver que las variables más importantes son `tenure`, `MonthlyCharges` y `Contract`, consistente con los resultados anteriores salvo `MonthlyCharges` que no aparece en los modelos desarrollados anteriormente.
 
-# estandarizamos las variables numéricas
-dissmatrix <- daisy(dfno, metric = 'gower')
+```{r, eval=TRUE}
+pander(importance(tmodel, type = 2), caption = 'Tabla de importancia de las variables del modelo de RandomForest.')
+```
+
+\newpage
+
+## Resultados
+
+En vista de lo obtenido anteriormente para cada uno de los algoritmos de clasificación considerados, el más idóneo y elegido finalmente es el de árboles de clasificación inferenciales, debido a su buen balance sensibilidad-especificidad y la facilidad de interpretación. Por tanto, según el árbol de la figura 3 tenemos los siguientes perfiles:
+
+\ 
+
+* **Desertores:** El perfil de los desertores, al menos el que detectan los algoritmos empleados, ya que la especificidad de los modelos ha resultado ser baja, es claro. Los desertores son clientes que adquieren un contrato mensual de fibra óptica y cuya relación con Movistar no supera el año de duración, siendo crucial el primer mes de contrato, en el que muchos clientes abandonan quizá insatisfechos con el servicio de fibra óptica recibido.
+* **No desertores:** El perfil de los clientes fidedignos es un poco variopinto, pero principalmente son clientes que superan el primer año de contrato con la empresa, ya sea via contrato anual o bianual o via contrato mensual con fibra óptica. Estos últimos clientes quizá dudosos en un principio con la calidad del servicio de fibra óptica, de ahí el contrato mensual, pero finalmente satisfechos. También son no desertores aquellos que contratan `DSL` o servicio telefónico de manera mensual habiendo permanecido en la empresa más de 5 meses.
+
+\newpage
+
+# Apartado 2
+
+El siguiente objetivo es detectar agrupamientos dentro de los grupos ya preestablecidos de desertores y no desertores. El método que emplearemos para abordar este problema es un conocido algoritmo de clustering denominado `Partitioning around medoids (PAM)` del que se dispone en el paquete `cluster`.
+
+## Metodología
+
+El algoritmo de clustering `Partitioning around medoids (PAM)`^[@kabacoff2010r] nos proporciona como resultado $K$ grupos donde $K$ es un hiperparámetro que damos nosotros a priori y donde el centro de cada grupo es una observación del conjunto de datos. En los algoritmos de clustering es crucial el concepto de distancia, ya que su funcionamiento está basado completamente en la similitud o diferencia habida entre las observaciones del conjunto de datos. En nuestro caso usaremos la métrica de gower, útil en el caso en que el conjunto de datos está compuesto por una mixtura de variables categóricas y numéricas.
+
+\ 
+
+Por otro lado, para medir la calidad de cada modelo usaremos la media de los índices de Silhouette de todas las observaciones del conjunto de datos. Este índice se calcula para cada observación y mide cómo de bien ''cae'' una observación en el cluster que le es asignado con un valor entre -1 y 1, siendo preferibles valores próximos a 1.
+
+```{r, eval=TRUE}
+# Liberamos memoria
+rm(list = ls())
+
+# Carga y manejo de datos
+file <- "Telco-Customer-Churn.csv"
+df <- read.csv(file = file, header = T, sep = ",", na.strings = "NA")
+df <- df[ , -c(1,20)]
+df <- na.omit(df)
+
+df$SeniorCitizen[df$SeniorCitizen == 0] <- 'No'
+df$SeniorCitizen[df$SeniorCitizen == 1] <- 'Yes'
+df$SeniorCitizen <- as.factor(df$SeniorCitizen)
+
+dfyes <- df[df$Churn == 'Yes' , -ncol(df)]
+dfno  <- df[df$Churn == 'No'  , -ncol(df)]
+
+rm(df)
+```
+
+
+```{r prettyplot, eval=TRUE}
+prettyplot <- function(nurow = 6, nucol = 3, data){
+  par(mfrow=c(nurow,nucol))
+  index <- 1
+  varfactor <- data$clustering
+  data <- data[ , -ncol(data)]
+
+  for (i in data) {
+    if(is.factor(i)){
+      n <- length(levels(i))
+      counts <- table(i, varfactor)
+      counts <- prop.table(counts, margin = 2)
+      if(n == 2){
+        barplot(counts, main=names(i),
+        xlab=names(data)[index], col=c("darkblue", "red"),
+        legend = rownames(counts), beside=TRUE, ylim = c(0,1),
+        cex.lab = 1.8, cex.names = 1.5) 
+      }
+      if(n == 3){
+        barplot(counts, main=names(i),
+        xlab=names(data)[index], col=c("darkblue", "red", "forestgreen"),
+        legend = rownames(counts), beside=TRUE, ylim = c(0,1), 
+        cex.lab = 1.8, cex.names = 1.5)
+      }
+      if(n == 4){
+        barplot(counts, main=names(i),
+        xlab=names(data)[index], col=c("darkblue", "red",
+                                       "forestgreen", "yellow2"),
+        legend = rownames(counts), beside=TRUE, ylim = c(0,1), 
+        cex.lab = 1.8, cex.names = 1.5)
+      } 
+    }else{
+      boxplot(i~varfactor, xlab=names(data)[index], cex.lab = 1.8,
+              cex.names = 1.5)
+    }
+    index <- index + 1
+  }  
+}
+```
+
+### No desertores
+
+En la figura 5 podemos ver un gráfico en el que se muestra la media de los índices de Silhouette frente al número de clusters o grupos creados. En vista de estos resultados el mejor modelo es aquel con dos grupos, esto es, $K=2$.
+
+```{r, eval=FALSE, fig.width=4, fig.height=4}
+data <- dfno
+# matriz de distancias de gower
+dissmatrix <- daisy(data, metric = 'gower')
 
 # Calculate silhouette width for many k using PAM
-
 sil_width <- c(NA)
 
-for(i in 2:15){
-  pam_fit <- pam(dissmatrix, diss = TRUE, k = 2)
+for(i in 2:10){
+  pam_fit <- pam(dissmatrix, diss = TRUE, k = i)
   sil_width[i] <- pam_fit$silinfo$avg.width
 }
 
 # Plot sihouette width (higher is better)
-
-plot(1:15, sil_width,
+plot(1:10, sil_width,
      xlab = "Number of clusters",
      ylab = "Silhouette Width")
-lines(1:15, sil_width)
+lines(1:10, sil_width)
 
 ```
 
+\ 
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-23-1}
+\caption{Gráfico del Silhouette width frente al número de clusters para los no desertores.}
+\end{figure}
+
+\ 
+
+La tabla siguiente muestra cuantos clientes asocia el algoritmo `PAM` a cada uno de los dos grupos. Como podemos ver, el primer grupo consta de 3554 observaciones y el segundo de 1620 observaciones.
+
+\ 
+
+```{r, eval=TRUE}
+data <- dfno
+dissmatrix <- daisy(data, metric = 'gower')
+pam_fit <- pam(dissmatrix, diss = TRUE, k = 2)
+data$clustering <- pam_fit$clustering
+table(data$clustering)
+
+rm(dissmatrix)
+rm(pam_fit)
+```
+
+\ 
+
+La figura 6 muestra una descripción gráfica de las características de cada uno de los dos grupos. Como se aprecia rápidamente, las variables referentes a los servicios de internet han dominado el agrupamiento, por lo que los dos grupos que el algoritmo ha distinguido principalmente son usuarios que tienen cualquier servicio de internet contratado y usuarios que no. Debido a la dominancia de estas variables, para ahondar un poco más en la estructura de los no desertores, nos planteamos dividir este mismo subgrupo en usuarios que contratan algún tipo de internet y usuarios que no y aplicar en estos dos subgrupos el algoritmo de clustering.
+
+```{r, eval=FALSE}
+prettyplot(data = data)
+```
+
+\ 
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-25-1}
+\caption{Gráfico descriptivo de las características de ambos grupos generados entre los no desertores.}
+\end{figure}
+
+\newpage
+
+#### No desertores que contratan algún servicio de internet
+
+\ 
+
+```{r, eval=TRUE}
+dfnowithin    <- dfno[dfno$InternetService != 'No', ]
+dfnowithin[ , 8:14] <- as.data.frame(lapply(dfnowithin[ , 8:14], factor))
+
+dfnowithnoin <- dfno[dfno$InternetService == 'No', ]
+dfnowithnoin <- dfnowithnoin[ , -(8:14)]
+
+rm(dfno)
+```
+
+El procedimiento a realizar aquí es el mismo que el anterior. En la figura 7 se muestra la calidad de los distintos modelos posibles en función del silhouette width. De nuevo, el mejor modelo es aquel con K=2.
+
+```{r, eval=FALSE, fig.width=4, fig.height=4}
+data <- dfnowithin
+# matriz de distancias de gower
+dissmatrix <- daisy(data, metric = 'gower')
+
+# Calculate silhouette width for many k using PAM
+sil_width <- c(NA)
+
+for(i in 2:10){
+  pam_fit <- pam(dissmatrix, diss = TRUE, k = i)
+  sil_width[i] <- pam_fit$silinfo$avg.width
+}
+
+# Plot sihouette width (higher is better)
+plot(1:10, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:10, sil_width)
+
+```
+
+\ 
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-27-1}
+\caption{Gráfico del Silhouette width frente al número de clusters para los no desertores con internet.}
+\end{figure}
+
+\ 
+
+La tabla siguiente muestra que 1978 observaciones forman el grupo 1 y 1783 observaciones forman el grupo 2.
+
+\ 
+
+```{r, eval=TRUE}
+data <- dfnowithin
+dissmatrix <- daisy(data, metric = 'gower')
+pam_fit <- pam(dissmatrix, diss = TRUE, k = 2)
+data$clustering <- pam_fit$clustering
+t1 <- table(data$clustering)
+t1
+
+rm(dissmatrix)
+rm(pam_fit)
+```
+
+\ 
+
+Finalmente, en la figura 8, podemos ver gráficamente las diferencias en las características de ambos grupos. También hay similidaridades, como que casi todos contratan servicio telefónico, son clientes no jubilados y contratan de forma equilibrada tanto DSL como fibra óptica. También prefieren factura electrónica. Los dos perfiles que podemos extraer de aquí son:
+
+\ 
+
+* **Perfil 1**: El primer perfil está formado por personas solteras que llevan poco tiempo en Movistar (`tenure`) cuyo contrato es de tipo mensual y no contratan ninguno de los demás servicios asociados a internet. También es más frecuente en este grupo no haber contratado múltiples líneas de teléfono.
+* **Perfil 2**: El segundo perfil es el cliente ideal. Está formado por clientes con pareja que contratan toda la cartera de servicios que ofrece Movistar y tienen, mayormente, un contrato bianual.  
+
+```{r, eval=FALSE}
+prettyplot(data = data)
+```
+
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-29-1}
+\caption{Gráfico descriptivo de las características de ambos grupos generados entre los no desertores con internet.}
+\end{figure}
+
+\FloatBarrier 
+
+#### No desertores que no contratan ningún servicio de internet
+
+\ 
+
+En la figura 9 podemos ver el índice de silhouette, un indicador de validez del modelo, en función del número de cluster escogidos. De nuevo, el mejor número de grupos a escoger es dos.
+
+```{r, eval=FALSE, fig.width=4, fig.height=4}
+data <- dfnowithnoin
+# matriz de distancias de gower
+dissmatrix <- daisy(data, metric = 'gower')
+
+# Calculate silhouette width for many k using PAM
+sil_width <- c(NA)
+
+for(i in 2:10){
+  pam_fit <- pam(dissmatrix, diss = TRUE, k = i)
+  sil_width[i] <- pam_fit$silinfo$avg.width
+}
+
+# Plot sihouette width (higher is better)
+plot(1:10, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:10, sil_width)
+
+```
+
+\ 
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-30-1}
+\caption{Gráfico del Silhouette width frente al número de clusters para los no desertores sin internet.}
+\end{figure}
+
+\ 
+
+La tabla siguiente muestra que 692 observaciones forman el grupo 1 y 721 observaciones forman el grupo 2.
+
+\ 
+
+```{r, eval=TRUE}
+data <- dfnowithnoin
+dissmatrix <- daisy(data, metric = 'gower')
+pam_fit <- pam(dissmatrix, diss = TRUE, k = 2)
+data$clustering <- pam_fit$clustering
+t2 <- table(data$clustering)
+t2
+
+rm(dissmatrix)
+rm(pam_fit)
+```
+
+\ 
+
+En la figura 10 se muestran gráficamente las características de los grupos generados. Podemos ver que ambos tienen en común son clientes no jubilados que contratan servicio telefónico, aunque no suelen contratar líneas múltiples, y que prefiere la factura en papel. Las diferencias entre los dos perfiles las discutimos a continuación:
+
+\ 
+
+* **Perfil 3**: En los clientes del tercer perfil encontramos usuarios mayormente hombres, solteros, con contrato de telefonía (con líneas múltiples poco frecuentes) y sin familiares al cargo. LLevan poco tiempo con Movistar, alrededor de un año de media, y el tipo de contrato que mantienen es mensual.
+* **Perfil 4**: En los clientes que conforman el cuarto perfil encontramos usuarios mayormente mujeres, con pareja, con contrato de telefonía y con familiares al cargo, de ahí que en este grupo sea algo más notable el contrato de líneas múltiples, pero sigue sin ser mayoritario. Además son clientes que llevan mucho tiempo con Movistar (más de dos años) y recurre, la gran mayoría, a un contrato bianual. 
+
+```{r, eval=FALSE}
+prettyplot(4, 3, data = data)
+```
+
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-32-1}
+\caption{Gráfico descriptivo de las características de ambos grupos generados entre los no desertores sin internet.}
+\end{figure}
+
+\FloatBarrier
+
+
+### Desertores
+
+En la figura 11 se muestra cómo de válido es cada uno de los modelos considerados en función del número de clusters elegidos utilizando como criterio el tamaño de silhouette, que no es más que la media de estos índices sobre todo el conjunto de datos. En este caso, quizá por el número distinto de observaciones, la variable `InternetService` y las asociadas a esta no dominan sobre las demás, obteniendo así como mejor resultado, con diferencia, un modelo con 3 clusters.
+
+```{r, eval=FALSE, fig.height=4, fig.width=4}
+data <- dfyes
+rm(dfyes)
+# matriz de distancias de gower
+dissmatrix <- daisy(data, metric = 'gower')
+
+# Calculate silhouette width for many k using PAM
+sil_width <- c(NA)
+
+for(i in 2:10){
+  pam_fit <- pam(dissmatrix, diss = TRUE, k = i)
+  sil_width[i] <- pam_fit$silinfo$avg.width
+}
+
+# Plot sihouette width (higher is better)
+plot(1:10, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:10, sil_width)
+
+```
+
+\ 
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-33-1}
+\caption{Gráfico del Silhouette width frente al número de clusters para los desertores.}
+\end{figure}
+
+\ 
+
+La tabla siguiente muestra que 1001 observaciones forman el grupo 1 y 752 observaciones forman el grupo 2 y 116 observaciones forman el grupo 3.
+
+\ 
+
+```{r, eval=TRUE}
+data <- dfyes
+dissmatrix <- daisy(data, metric = 'gower')
+pam_fit <- pam(dissmatrix, diss = TRUE, k = 3)
+data$clustering <- pam_fit$clustering
+t3 <- table(data$clustering)
+t3
+
+rm(dissmatrix)
+rm(pam_fit)
+```
+
+\ 
+
+La figura 12 muestra gráficamente las distintas características de los grupos generados por el algoritmo de clutering `PAM` para $K=3$. Los perfiles que podemos deducir de esta figura son los siguientes:
+
+\ 
+
+* **Perfil 5:** Los clientes que conforman en quinto perfil son clientes mayoritariamente solteros sin parientes a su cargo. Las mujeres son ligeramente más numerosas que los hombres en este grupo. Llevan poco tiempo en la empresa y no suelen contratar líneas múltiples de telefonía. Todos ellos contratan servicio de internet y prefieren fibra óptica, aunque también hay un grupo numeroso de clientes que contratan DSL. Son clientes que asumen un gasto mensual moderado, prefieren la factura electrónica y no contratan ninguno de los demás servicios asociados a internet. Todos tienen, además, un contrato de tipo mensual y el método de pago preferido es Electronic Check.
+* **Perfil 6:** En el perfil 6 encontramos clientes mayoritariamente con pareja sin dependientes al cargo que llevan una media de dos años. Los hombres son ligeramente más numerosos que las mujeres en este grupo. Se decantan, sin duda, por la fibra óptica y contratan líneas múltiples. No suelen contratar servicios de internet asociados al soporte técnico o la seguridad pero sí contratan televisión y películas en streaming. Asumen un gasto mensual muy alto y prefieren la factura electrónica pagada siempre mediante Electronic check.
+
+\ 
+
+* **Perfil 7:** Este perfil es el de los que no contratan el servicio de internet. Son clientes que llevan poco tiempo con Movistar y asumen un gasto mensual bajo. Son personas solteras, sin dependientes al cargo que prefiren la factura en papel pagada mediante Mailed check.
+
+```{r, eval=FALSE}
+prettyplot(data = data)
+```
+
+\ 
+
+\begin{figure}[h]
+\centering
+\includegraphics{Figs/unnamed-chunk-35-1}
+\caption{Gráfico descriptivo de las características de los tres grupos generados entre los desertores.}
+\end{figure}
+
+\FloatBarrier
+
+\newpage
+
+## Resultados
+
+A continuación se muestran los siete perfiles obtenidos así como su características.
+
+### No desertores
+
+#### Con servicio internet
+
+\ 
+
+* **Perfil 1:**(n=`r t1[1]`) El primer perfil está formado por personas solteras que llevan poco tiempo en Movistar (`tenure`) cuyo contrato es de tipo mensual y no contratan ninguno de los demás servicios asociados a internet. También es más frecuente en este grupo no haber contratado múltiples líneas de teléfono. No tienen una preferencia clara sobre DSL o fibra óptica y sí prefieren factura electrónica.
+* **Perfil 2:**(n=`r t1[2]`) El segundo perfil es el cliente ideal. Está formado por clientes con pareja que contratan toda la cartera de servicios que ofrece Movistar y tienen, mayormente, un contrato bianual. No tienen una preferencia clara sobre DSL (aunque este es más frecuente) o fibra óptica y sí prefieren factura electrónica.
+
+#### Sin servicio a internet
+
+\ 
+
+* **Perfil 3:**(n=`r t2[1]`) En los clientes del tercer perfil encontramos usuarios mayormente hombres, solteros, con contrato de telefonía (con líneas múltiples poco frecuentes) y sin familiares al cargo. LLevan poco tiempo con Movistar, alrededor de un año de media, y el tipo de contrato que mantienen es mensual. Prefieren factura en papel.
+* **Perfil 4:**(n=`r t2[2]`) En los clientes que conforman el cuarto perfil encontramos usuarios mayormente mujeres, con pareja, con contrato de telefonía y con familiares al cargo, de ahí que en este grupo sea algo más notable el contrato de líneas múltiples, pero sigue sin ser mayoritario. Además son clientes que llevan mucho tiempo con Movistar (más de dos años) y recurre, la gran mayoría, a un contrato bianual. Prefieren factura en papel.
+
+
+### Desertores
+
+* **Perfil 5:**(n=`r t3[1]`) Los clientes que conforman en quinto perfil son clientes mayoritariamente solteros sin parientes a su cargo. Las mujeres son ligeramente más numerosas que los hombres en este grupo. Llevan poco tiempo en la empresa y no suelen contratar líneas múltiples de telefonía. Todos ellos contratan servicio de internet y prefieren fibra óptica, aunque también hay un grupo numeroso de clientes que contratan DSL. Son clientes que asumen un gasto mensual moderado, prefieren la factura electrónica y no contratan ninguno de los demás servicios asociados a internet. Todos tienen, además, un contrato de tipo mensual y el método de pago preferido es Electronic Check.
+* **Perfil 6:**(n=`r t3[2]`) En el perfil 6 encontramos clientes mayoritariamente con pareja sin dependientes al cargo que llevan una media de dos años. Los hombres son ligeramente más numerosos que las mujeres en este grupo. Se decantan, sin duda, por la fibra óptica y contratan líneas múltiples. No suelen contratar servicios de internet asociados al soporte técnico o la seguridad pero sí contratan televisión y películas en streaming. Asumen un gasto mensual muy alto y prefieren la factura electrónica pagada siempre mediante Electronic check.
+* **Perfil 7:**(n=`r t3[3]`) Este perfil es el de los que no contratan el servicio de internet. Son clientes que llevan poco tiempo con Movistar y asumen un gasto mensual bajo. Son personas solteras, sin dependientes al cargo que prefiren la factura en papel pagada mediante Mailed check.
+
+
+\newpage
+
+# Apartado 3
+
+El último objetivo es diseñar una oferta personalizada a cada uno de los grupos obtenidos anteriormente estimando el coste que supondría dicha campaña. Para ello, en primero lugar, debemos estimar los precios de cada uno de los servicios ofrecidos.
+
+### Estimación del precio de los servicios
+
+Para estimar el precio de cada uno de los servicios ofrecidos por Movistar tan solo es necesario desarrollar un modelo lineal en el que la variable dependiente es `MontlyCharges` y las variables independientes o predictoras son cada uno de los servicios que ofrece Movistar, tomando el valor de 1 si el cliente contrata este servicio y 0 si no. Cada uno de los coeficientes del modelo será, entonces, el precio del servicio asociado.
+
+\ 
+
+Los coeficientes del modelo lineal calculado se muestran en la siguiente tabla. Como podemos ver, todos son estadísticamente significativos, salvo el término independiente, el cual interesa que sea cero. El modelo explica casi el total de la varianza de los datos, $r^2 = 0.99$ lo que concuerda con nuestra hipótesis. De este modo, podemos tomar estos coeficientes como precios aproximados de los servicios.
+
+\ 
+
+```{r, eval=TRUE}
+file <- "Telco-Customer-Churn.csv"
+df <- read.csv(file = file, header = T, sep = ",", na.strings = "NA")
+df <- df[ , -c(1,20)]
+df <- na.omit(df)
+
+df$SeniorCitizen[df$SeniorCitizen == 0] <- 'No'
+df$SeniorCitizen[df$SeniorCitizen == 1] <- 'Yes'
+df$SeniorCitizen <- as.factor(df$SeniorCitizen)
+
+gastos <- df[, c(6:14, 18)]
+
+rm(df)
+
+tono <- function(x){
+  x[x=='No internet service'] <- 'No'
+  x <- factor(x)
+  x
+}
+
+gastos$MultipleLines[gastos$MultipleLines=='No phone service'] <- 'No'
+gastos$MultipleLines <- factor(gastos$MultipleLines)
+
+gastos[ , 4:9] <- as.data.frame(lapply(gastos[ , 4:9], tono))
+
+gastos$FiberOptic <- as.character(gastos$InternetService)
+gastos$FiberOptic[gastos$FiberOptic=='DSL'] <- 'No'
+gastos$FiberOptic[gastos$FiberOptic=='Fiber optic'] <- 'Yes'
+gastos$FiberOptic <- factor(gastos$FiberOptic)
+
+gastos$DSL <- as.character(gastos$InternetService)
+gastos$DSL[gastos$DSL=='DSL'] <- 'Yes'
+gastos$DSL[gastos$DSL=='Fiber optic'] <- 'No'
+gastos$DSL <- factor(gastos$DSL)
+
+gastos <- gastos[ ,-3]
+
+model <- lm(MonthlyCharges ~ ., data = gastos)
+p <- model$coefficients
+
+options(scipen=999)
+
+p1 <- (p[8] + p[9] - 5)*t1[1]*6
+p2 <- (p[10]-p[11])*6*t1[2]*0.6
+p3 <- (p[11]-10)*6*t2[1]
+p4 <- (p[8] + p[9] + p[10])*t2[2]*12*0.15
+p5 <- (p[8] + p[9])*t3[1]*6
+p6 <- (p[2]+p[3]+p[10]+p[5]+p[6]+p[8]+p[9])*t3[2]*0.3*6
+p7 <- p[10]*t3[3]*6*0.5
+
+summary(model)
+```
+
+## Campaña de incentivos
+
+El coste será estimado en términos de pérdidas, esto es, en términos generales,
+
+$$Coste = n\sum_i^{10}\theta(i)P_i(D_i)t_i$$
+
+donde $\theta(i)$ vale 1 o 0 dependiendo de si ese servicio es ofertado o no, $P_i$ es el precio del servicio $i$, $D_i$ es el descuento aplicado al servicio $i$, $t_i$ el tiempo de aplicación del descuento y $n$ el número de clientes en el grupo.
+
+### Ofertas por grupos
+
+### No desertores
+
+#### Con servicio internet
+
+\ 
+
+* **Perfil 1:**(n=`r t1[1]`) El objetivo para este grupo sería conseguir un contrato anual o bianual, ya que los clientes con este tipo de contrato tienen una probabilidad de deserción menor. Como son personas solteras no tiene sentido ofrecerles líneas múltiples, así que lo más idóneo sería, por ejemplo, ofrecer televisión y películas en streaming por 5 € mensuales durante seis meses a cambio de un contrato anual Coste: `r round(p1, 2)` €
+* **Perfil 2:**(n=`r t1[2]`) El segundo perfil era el cliente ideal. Era aquel que tenía todo contratado con contratos mayormente anuales y bianuales. Aunque es muy poco probable perder este cliente también hay que cuidarlo. Una buena oferta sería fibra óptica al precio de DSL durante seis para clientes que tengan contratado DSL como premio a su fidelidad. Coste `r round(p2, 2)` €
+
+#### Sin servicio a internet
+
+\ 
+
+* **Perfil 3:**(n=`r t2[1]`) Ya que este grupo son clientes solteros que llevan poco tiempo con nosotros, y en vista de que la gente que contrata fibra óptica llevando poco tiempo con Movistar suele romper el contrato, una buena oferta para este grupo sería DSL por 10€ mensuales durante seis meses con la condición de pasar a contrato anual. Coste: `r round(p3, 2)` € 
+* **Perfil 4:**(n=`r t2[2]`) Ya que este grupo de clientes suelen ser clientes con pareja y familiares al cargo, además de clientes con contratos bianuales, una buena oferta para premiar su fidelidad y que podrían compartir en familia sería fibra óptica, películas y televisión en streaming al 85% durante un año.
+Coste: `r round(p4, 2)` €
+
+### Desertores
+
+* **Perfil 5:**(n=`r t3[1]`) Estos clientes tenían contratado tanto internet como líneas móviles. Una buena oferta para retenerlos en la compañía podría haber sido televisión y películas en streaming gratis durante 6 meses a cambio de un contrato anual. Coste: `r round(p5, 2)` €
+* **Perfil 6:**(n=`r t3[2]`) Estos clientes tienen prácticamente todo contratado, pero de forma mensual. Una opción para retenerlos podría ser ofertarles un descuento del 30% en su tarifa mensual actual durante 6 meses a cambio de un contrato anual. Coste: `r round(p6, 2)` €
+* **Perfil 7:**(n=`r t3[3]`) Este era el perfil de aquellas personas con contrato mensual sin internet. Una buena oferta que quizá podría retenerlos en la compañía es buen internet a precio inmejorable. Fibra óptica al 50% durante seis meses a cambio de un contrato anual. Coste: `r round(p7, 2)` €
+
+\ 
+
+**Coste Total:** `r round(p1+p2+p3+p4+p5+p6+p7, 2)` €
+
+\newpage
+
+# Bibliografía
